@@ -1,0 +1,103 @@
+---
+title: "udnNewsCrawl"
+output: html_document
+---
+
+# library
+
+```{r}
+library(rvest)
+library(httr)
+library(dplyr)
+```
+
+# Connect to NTU VPN manually
+#get JESSESION ID
+
+```{r}
+allhrefs <- c()
+login <- GET("https://udndata.com/ndapp/member/MbFixLogin")
+id <- login$cookies$value
+id <- login$cookies
+url <-
+	"http://udndata.com/ndapp/Searchdec?udndbid=udndata&page=1&SearchString=%AB%F7%2B%A4%E9%B4%C1%3E%3D19510101%2B%A4%E9%B4%C1%3C%3D19711231%2B%B3%F8%A7%4F%3D%C1%70%A6%58%B3%F8%7C%B8%67%C0%D9%A4%E9%B3%F8%7C%A5%C1%A5%CD%B3%F8%7C%C1%70%A6%58%B1%DF%B3%F8&sharepage=20&select=1&kind=2"
+url <- GET(url, set_cookies('JSESSIONID' = sprintf('%s', id)))
+doc <- read_html(url)
+```
+
+#lastpage
+
+```{r}
+lastpage.num <-
+	as.numeric(xml_text(
+		xml_find_all(doc, '//*[@id="mainbar"]/section/div[1]/span[2]/text()')
+	))
+```
+
+#get allhref
+
+```{r}
+for (i in c(1:lastpage.num)) {
+	url <-
+		paste0(
+			"https://udndata.com/ndapp/Searchdec?udndbid=udndata&page=",
+			i,
+			"&SearchString=%AA%C0%B7%7C%B9%42%B0%CA%2B%B3%F8%A7%4F%3D%C1%70%A6%58%B3%F8%7C%B8%67%C0%D9%A4%E9%B3%F8%7C%C1%70%A6%58%B1%DF%B3%F8%7CUpaper&sharepage=20&select=1&kind=2"
+		)
+	url <- GET(url, set_cookies('JSESSIONID' = sprintf('%s', id)))
+	doc <- read_html(url)
+	href <-
+		xml_attr(
+			xml_find_all(doc, '//*[@id="mainbar"]/section/div[6]/ul/li/div/h2/a'),
+			"href"
+		)
+	hrefs <- paste0('http://udndata.com', href)
+	allhrefs <- c(allhrefs, hrefs)
+	print(length(allhrefs))
+}
+```
+
+#get all data
+
+```{r}
+alldata <- data.frame(
+	title = character(0),
+	content = character(0),
+	time = character(0),
+	author = character(0),
+	link = character(0)
+)
+for (i in c(1:length(allhrefs))) {
+	aurl <-
+		GET(allhrefs[i], set_cookies('JSESSIONID' = sprintf('%s', id)))
+	tdoc <- read_html(aurl)
+	link <- allhrefs[i]
+
+	title <- xml_text(xml_find_all(tdoc, '//*[@id="print"]/h1'))
+
+	content <-
+		xml_text(xml_find_all(tdoc, '//*[@id="print"]/article/p'))
+	temp <- content
+	content <- paste(content, collapse = " ")
+
+	time <- xml_text(xml_find_all(tdoc, '//*[@id="print"]/span[2]'))
+	time <- substr(time, 2, 11)
+	author <-
+		xml_text(xml_find_all(tdoc, '//*[@id="print"]/span[1]'))
+	author <- gsub("【", "", author)
+	author <- gsub("】", "", author)
+	author <- sub("記者(.{3})╱.{2}報導", "\\1", author)
+	tempdf <-
+		data.frame(
+			title = title,
+			content = content,
+			time = time,
+			author = author,
+			link = link
+		)
+	alldata <- rbind.fill(alldata, tempdf)
+	print(nrow(alldata))
+}
+```
+
+
