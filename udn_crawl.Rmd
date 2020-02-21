@@ -1,0 +1,254 @@
+---
+title: "news_html_to_df"
+author: "Astrid Hsu"
+date: "2020年2月10日"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(rvest)
+library(stringr)
+library(lubridate)
+library(httr)
+library(jsonlite)
+options(stringsAsFactors = F)
+options(scipen = 999)
+update.packages("httr")
+```
+
+# Open html file ----------------------------------------------------------
+# transforming html into Rdata
+
+```{r 合併所有html檔並轉換成metadata}
+
+# 複製另一個資料夾
+# 將所有檔名依照順序改成udn (1).htm, udn (2).htm, ......
+
+# 2004-2020
+#for (i in 1:12){
+#    tmp_txt <- paste(readLines(sprintf("paper_news_rename/udn (%d).htm", i), encoding = "UTF-8"), collapse="\n")
+#    txt <- paste0(txt, tmp_txt, collapse="\n")
+#}
+
+# 2012-2020
+
+txt <- character()
+
+for (i in 7:12){
+    tmp_txt <- paste(readLines(sprintf("paper_news_rename/udn (%d).htm", i), encoding = "UTF-8"), collapse="\n")
+    txt <- paste0(txt, tmp_txt, collapse="\n")
+}
+
+# html >>> metadata
+
+nodes.tr <- read_html(txt) %>% html_nodes("tr")
+titles <- nodes.tr %>% html_node("h3 > a") %>% html_text()
+metadata <- nodes.tr %>% html_node("ul") %>% html_text()
+
+```
+
+```{r 將metadata轉成rda}
+
+tbl <- tibble(titles, metadata) %>%
+    mutate(metadata = str_replace_all(metadata, "\\s", "")) %>%
+    mutate(date = str_sub(str_extract(metadata, regex("〔出版日期〕(.*?)〔")), 7, -2)) %>%
+    mutate(media = str_sub(str_extract(metadata, regex("〔報刊名〕(.*?)〔")), 6, -2)) %>%
+    mutate(board = str_sub(str_extract(metadata, regex("〔版次/版名〕(.*?)〔")), 8, -2)) %>%
+    mutate(author = str_sub(str_extract(metadata, regex("〔作者〕(.*?)〔")), 5, -2)) %>%
+    mutate(cat = str_sub(str_extract(metadata, regex("〔主題類別〕(.*?)〔")), 7, -2)) %>%
+    mutate(note = str_sub(str_extract(metadata, regex("〔摘要〕(.*)")), 5, -2))
+
+```
+
+```{r 存檔}
+
+#save(tbl, file = "rda/udnALL.rda")
+save(tbl, file = "rda/udn2012_2020.rda")
+
+#load("C:/Users/Asus/Desktop/news_clickbait/rda/udn2012_2020.rda")
+
+```
+
+# Finish transforming --------------------------
+# Start crawling -------------------------------
+
+取出每列的標題號，以空白分隔，將字數大於五之字串形成文字向量，視為檢索標題依序進行搜尋，取下前三名，將搜尋到之資料形成dataframe。
+(原標題org_title、檢索標題tmp_title、新標題res$lists$title、時間res$lists$time、超鏈結res$lists$titleLink、摘要res$lists$paragraph、分類res$lists$cateTitle、詮釋資料(搜尋時間))
+
+```{r}
+
+online_df <- data.frame()
+
+```
+
+
+```{r 依照關鍵字搜尋}
+
+#for (i in 1:nrow(tbl)){
+for (i in 4262:nrow(tbl)){
+    org_title <- as.character(tbl[i, 1]) # 取出標題字串
+    sub_titles_vec <- as.vector(unlist(strsplit(org_title, split = "[ /：，。「」！？；、＆#:;]"))) # 將標題字串分割
+    #sub_titles_vec <- sub_titles_vec[-1]
+    print(sprintf("starting searching %d row of tbl. Title = %s", i, org_title))
+    
+    #若字串長度大於4，視為獨立關鍵字進行搜尋
+    for (tmp_title in sub_titles_vec){
+        if (nchar(tmp_title) < 4){
+            next
+        }else{
+            j <- 1
+            # 搜尋多個頁面，因為大選是很久以前的事了
+            #while (j != 0){
+            while (j == 1){ # 2020年的就不用爬那麼多，爬第一頁就好
+                print(sprintf("downloading page %d", j) )
+                request_url <- paste0("https://udn.com/api/more?page=", j, "&id=search:", tmp_title, "&channelId=2&type=searchword&last_page=100")
+                
+                tmp_res <- fromJSON(content(GET(request_url), "text"))
+                tmp_df <- tmp_res$lists
+                
+                # 若查無資料，代表這個關鍵字沒有更多資料，自動進行下一個關鍵字搜尋
+                if (length(tmp_df) == 0 ){
+                    break
+                }else{
+                    tmp_df <- data.frame(orgTitle = org_title, keyWord = tmp_title, onlineTitle = tmp_res$lists$title, dateTime = tmp_res$lists$time$dateTime, titleLink = tmp_res$lists$titleLink, paragraph = tmp_res$lists$paragraph, cateTitle = tmp_res$lists$cateTitle)
+                    online_df <- rbind(online_df, tmp_df, row.name = NULL)
+                    j <- j + 1
+                }                
+            }
+            next
+        }
+    }    
+}
+
+```
+
+```{r 存檔}
+
+save(online_df, file = "rda/udn_online_2012_2020.rda")
+
+#load("C:/Users/Asus/Desktop/news_clickbait/rda/udn_online_2012_2020.rda")
+
+```
+
+# Finish crawling --------------------------
+# Selecting Useful News --------------------
+
+# match title
+# match 前後兩周日期
+# 選前三則
+
+```{r online_df$orgTitle, tbl$titles }
+
+# change colname
+
+online_df_rename <- online_df
+colnames(online_df_rename)[1] <- "titles"
+
+```
+
+```{r 合併並刪除重複值}
+
+# join
+
+online_df2 <- left_join(tbl, online_df_rename, by = "titles")
+online_df2 <- unique(online_df2)
+
+```
+
+```{r online_df$orgTitle, tbl$titles }
+
+online_df3 <- online_df2 %>%
+    mutate(offline_t = as_date(date)) %>%
+    mutate(online_t = as_date(dateTime)) %>%
+    filter(abs(difftime(offline_t, online_t)) <= 7) %>%
+    filter(!duplicated(titles, onlineTitle))
+
+```
+
+
+```{r 整理成老師需要的格式}
+
+udn_df <- online_df3 %>%
+    select(media, titles, onlineTitle, note, paragraph, keyWord, offline_t, online_t, titleLink)
+
+```
+
+```{r 存檔}
+
+save(udn_df, file = "rda/udn_df.rda")
+write.csv(udn_df, file = "rda/udn_df.csv")
+
+#load("C:/Users/Asus/Desktop/news_clickbait/rda/udn_df.rda")
+a <- read_csv("rda/sim_df.csv", col_names = T)
+head(udn_df)
+
+```
+
+# similarity --------------------------------------
+```{r 提取試驗區間}
+
+sim_df <- udn_df[1:20, ] %>%
+    select(titles, onlineTitle)
+
+```
+
+```{r}
+
+data1 <- udn_df %>%
+    mutate(election = case_when(offline_t <= "2012-02-01" ~ "2012",
+                                offline_t > "2012-02-01" & offline_t <= "2016-02-01" ~ "2016",
+                                offline_t >= "2019-01-01" ~ "2020",
+                                TRUE ~ "ineffective"))
+
+
+udn_df$offline_t[1] < "2012-01-14"
+class(udn_df$offline_t[1])
+data2 <- data1 %>%
+    group_by(election) %>%
+    summarise(freq = n()) %>% View()
+summary(udn_df)
+```
+
+
+```{r}
+library(superml)
+installed.packages("superml")
+ 
+sents = c('i am alone in dark.','mother_mary a lot',
+         'alone in the dark?', 'many mothers in the lot....')
+cv <- CountVectorizer$new(min_df=0.1)
+cv_count_matrix <- cv$fit_transform(sents)
+
+```
+
+
+
+
+
+```{r}
+which(online_df[,2]== "四大天王")
+tail(online_df)
+as.character(online_df$orgTitle[1015434])
+which(tbl[,1] == "北市居住正義2.0 實價揭露區間縮小")
+tbl[4260:4262,]
+```
+
+```{r tryCatch 函數}
+tryCatch({
+    x = "-1"
+    z = sqrt(x)},
+    # 遇到 warning 時的自訂處理函數
+    warning = function(msg) {
+        message("Original warning message:")
+        return(NULL)
+        },
+     # 遇到 error 時的自訂處理函數
+     error = function(msg) {
+         message("Original error message:")
+         return(NA)
+         }
+    ) 
+```
+
+
